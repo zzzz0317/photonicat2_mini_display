@@ -497,6 +497,9 @@ func idleDimmer() {
 			idleState = newState
 			prevState = newState
 
+			// Update intervals immediately when state changes
+			updateIntervals()
+
 			// ── Cancel any existing fade by closing fadeCancel ──────────
 			fadeMu.Lock()
 			if fadeCancel != nil {
@@ -525,7 +528,6 @@ func idleDimmer() {
 
 			case STATE_IDLE:
 				setBacklight(0)
-				desiredFPS = 1
 			}
 		}
 

@@ -549,20 +549,35 @@ func wrapText(text string, maxWidth int, face font.Face) []string {
 }
 
 func getSmsPages() {
-	for {
-		if cfg.ShowSms {
-			//log.Println("Collecting SMS")
-			lenSmsPagesImages = collectAndDrawSms(&cfg)
-			if lenSmsPagesImages == 0 {
-				lenSmsPagesImages = 1
-			}
-			log.Println("collect lenSmsPagesImages:", lenSmsPagesImages)
-			totalNumPages = cfgNumPages + lenSmsPagesImages
-		} else {
-			// SMS disabled - only JSON config pages
-			lenSmsPagesImages = 0
-			totalNumPages = cfgNumPages
+	getSmsInterval := func() time.Duration {
+		if idleState == STATE_IDLE {
+			return baseSmsInterval * time.Duration(idleMultiplier)
 		}
-		time.Sleep(INTERVAL_SMS_COLLECT)
+		return baseSmsInterval
+	}
+
+	ticker := time.NewTicker(getSmsInterval())
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if cfg.ShowSms {
+				//log.Println("Collecting SMS")
+				lenSmsPagesImages = collectAndDrawSms(&cfg)
+				if lenSmsPagesImages == 0 {
+					lenSmsPagesImages = 1
+				}
+				log.Println("collect lenSmsPagesImages:", lenSmsPagesImages)
+				totalNumPages = cfgNumPages + lenSmsPagesImages
+			} else {
+				// SMS disabled - only JSON config pages
+				lenSmsPagesImages = 0
+				totalNumPages = cfgNumPages
+			}
+		case <-intervalUpdateChan:
+			ticker.Stop()
+			ticker = time.NewTicker(getSmsInterval())
+		}
 	}
 }

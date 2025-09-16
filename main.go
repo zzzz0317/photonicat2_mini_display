@@ -117,10 +117,23 @@ var (
 	battChargingStatus = false
 	battSOC            = 0
 
+	// Base intervals
+	baseBatteryDataInterval   = 1 * time.Second
+	baseDataGatherInterval    = 2 * time.Second
+	baseNetworkGatherInterval = 3 * time.Second
+	basePcatWebInterval       = INTERVAL_PCAT_WEB_COLLECT
+	baseSmsInterval           = INTERVAL_SMS_COLLECT
+
+	// Current intervals (can be modified by idle state)
 	batteryDataInterval   = 1 * time.Second
 	dataGatherInterval    = 2 * time.Second
 	networkGatherInterval = 3 * time.Second
 
+	// Idle state management
+	idleMultiplier     = 10
+	intervalUpdateChan = make(chan struct{}, 10)
+
+	baseFPS    = DEFAULT_FPS
 	desiredFPS = DEFAULT_FPS
 
 	lastBrightness = -1
@@ -415,6 +428,31 @@ func (dw *DisplayWrapper) GetTransferStats() map[string]interface{} {
 	}
 }
 
+// updateIntervals updates all intervals and FPS based on current idle state
+func updateIntervals() {
+	if idleState == STATE_IDLE {
+		// Increase intervals by idle multiplier during idle state
+		batteryDataInterval = baseBatteryDataInterval * time.Duration(idleMultiplier)
+		dataGatherInterval = baseDataGatherInterval * time.Duration(idleMultiplier)
+		networkGatherInterval = baseNetworkGatherInterval * time.Duration(idleMultiplier)
+		// Set FPS to very low value during idle (effectively 0.1 FPS by using 1 and adjusting sleep calculation)
+		desiredFPS = 1  // Will be adjusted in the sleep calculation for idle state
+	} else {
+		// Reset to base intervals and FPS when active
+		batteryDataInterval = baseBatteryDataInterval
+		dataGatherInterval = baseDataGatherInterval
+		networkGatherInterval = baseNetworkGatherInterval
+		desiredFPS = baseFPS
+	}
+
+	// Signal all goroutines to update their intervals
+	select {
+	case intervalUpdateChan <- struct{}{}:
+	default:
+		// Channel is full, skip
+	}
+}
+
 func main() {
 	var wg sync.WaitGroup
 	all := flag.Bool("all", false, "if set, listen on all network interfaces (0.0.0.0)")
@@ -577,37 +615,81 @@ func main() {
 
 	//collect data for middle and footer, non-blocking
 	go func() {
+		ticker := time.NewTicker(dataGatherInterval)
+		defer ticker.Stop()
+
 		for {
-			collectLinuxData(cfg)
-			time.Sleep(dataGatherInterval)
+			select {
+			case <-ticker.C:
+				collectLinuxData(cfg)
+			case <-intervalUpdateChan:
+				ticker.Stop()
+				ticker = time.NewTicker(dataGatherInterval)
+			}
 		}
 	}()
 
 	go func() {
+		ticker := time.NewTicker(dataGatherInterval)
+		defer ticker.Stop()
+
 		for {
-			collectNetworkData(cfg)
-			time.Sleep(dataGatherInterval)
+			select {
+			case <-ticker.C:
+				collectNetworkData(cfg)
+			case <-intervalUpdateChan:
+				ticker.Stop()
+				ticker = time.NewTicker(dataGatherInterval)
+			}
 		}
 	}()
 
 	go func() {
+		ticker := time.NewTicker(batteryDataInterval)
+		defer ticker.Stop()
+
 		for {
-			collectBatteryData()
-			time.Sleep(batteryDataInterval)
+			select {
+			case <-ticker.C:
+				collectBatteryData()
+			case <-intervalUpdateChan:
+				ticker.Stop()
+				ticker = time.NewTicker(batteryDataInterval)
+			}
 		}
 	}()
 
 	go func() {
+		ticker := time.NewTicker(basePcatWebInterval)
+		defer ticker.Stop()
+
 		for {
-			getInfoFromPcatWeb()
-			time.Sleep(INTERVAL_PCAT_WEB_COLLECT)
+			select {
+			case <-ticker.C:
+				getInfoFromPcatWeb()
+			case <-intervalUpdateChan:
+				currentInterval := basePcatWebInterval
+				if idleState == STATE_IDLE {
+					currentInterval = basePcatWebInterval * time.Duration(idleMultiplier)
+				}
+				ticker.Stop()
+				ticker = time.NewTicker(currentInterval)
+			}
 		}
 	}()
 
 	go func() {
+		ticker := time.NewTicker(networkGatherInterval)
+		defer ticker.Stop()
+
 		for {
-			collectWANNetworkSpeed()
-			time.Sleep(networkGatherInterval)
+			select {
+			case <-ticker.C:
+				collectWANNetworkSpeed()
+			case <-intervalUpdateChan:
+				ticker.Stop()
+				ticker = time.NewTicker(networkGatherInterval)
+			}
 		}
 	}()
 
@@ -1007,7 +1089,16 @@ func mainLoop() {
 				middleFrames++
 
 				// stable‐FPS sleep with signal-based interruption for page changes
-				if delta := (time.Second/time.Duration(desiredFPS) - time.Since(start)); delta > 0 {
+				// Apply idle multiplier to FPS during idle state (effectively 0.1 FPS)
+				effectiveFPS := desiredFPS
+				if idleState == STATE_IDLE {
+					effectiveFPS = 1  // This gives us 1 FPS, but we'll multiply the sleep time by 10
+				}
+				baseSleep := time.Second / time.Duration(effectiveFPS)
+				if idleState == STATE_IDLE {
+					baseSleep = baseSleep * time.Duration(idleMultiplier)  // 1 FPS * 10 = 0.1 FPS
+				}
+				if delta := (baseSleep - time.Since(start)); delta > 0 {
 					sleepDuration := time.Duration(float64(delta) * 0.99)
 					select {
 					case <-pageChangeSignal:
