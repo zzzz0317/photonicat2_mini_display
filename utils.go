@@ -25,6 +25,9 @@ var (
 	swippingScreen       bool
 	wasScreenIdle        bool // Track if screen was idle when key was pressed
 	wasConsoleScreenIdle bool // Track if screen was idle for console input
+
+	backlightMaxOnce   sync.Once
+	cachedBacklightMax = 100
 )
 
 // loadConfig reads and unmarshals the config file.
@@ -183,6 +186,36 @@ func max(a, b int) int {
 	return b
 }
 
+func logicalToPhysicalBrightness(logical int) int {
+	hwMax := getCachedBacklightMax()
+	if logical <= 0 {
+		return 0
+	}
+	phys := (logical*hwMax + 50) / 100 // round
+	if phys < 1 {
+		phys = 1
+	}
+	if phys > hwMax {
+		phys = hwMax
+	}
+	return phys
+}
+
+func physicalToLogicalBrightness(physical int) int {
+	hwMax := getCachedBacklightMax()
+	if hwMax <= 0 || physical <= 0 {
+		return 0
+	}
+	logical := int(math.Round(float64(physical*100) / float64(hwMax)))
+	if logical < 0 {
+		return 0
+	}
+	if logical > 100 {
+		return 100
+	}
+	return logical
+}
+
 func setBacklight(brightness int) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -190,7 +223,7 @@ func setBacklight(brightness int) {
 	// Get effective max brightness (runtime override or config)
 	effectiveMaxBrightness := getEffectiveMaxBrightness()
 
-	// clamp into 0..effectiveMaxBrightness
+	// clamp logical brightness into cfg range
 	switch {
 	case brightness < cfg.ScreenMinBrightness:
 		brightness = cfg.ScreenMinBrightness
@@ -209,27 +242,23 @@ func setBacklight(brightness int) {
 		offTimer = nil
 	}
 
-	// choose what to write right now:
-	phys := brightness
+	// map logical(0~100) -> physical(0~max_brightness)
+	phys := logicalToPhysicalBrightness(brightness)
 	if brightness == 0 {
-		phys = 1
+		phys = 1 // keep panel alive briefly, then delayed real off(0)
 	}
 
-	// perform the write
 	if err := os.WriteFile("/sys/class/backlight/backlight/brightness", []byte(strconv.Itoa(phys)), 0644); err != nil {
 		log.Printf("backlight write error: %v", err)
-	} else {
-		//log.Printf("→ physical backlight %d", phys)
 	}
 
-	// if we just handled a logical “0”, schedule the real off in ZERO_BACKLIGHT_DELAY s
+	// if logical 0, schedule real off
 	if brightness == 0 {
 		offTimer = time.AfterFunc(ZERO_BACKLIGHT_DELAY, func() {
 			mu.Lock()
 			defer mu.Unlock()
 			if lastLogical == 0 {
-				// still supposed to be off, so write 0 now
-				if err := os.WriteFile("/sys/class/backlight/backlight/brightness", []byte("1"), 0644); err != nil {
+				if err := os.WriteFile("/sys/class/backlight/backlight/brightness", []byte("0"), 0644); err != nil {
 					log.Printf("backlight final-off error: %v", err)
 				} else {
 					log.Println("→ physical backlight OFF")
@@ -237,6 +266,24 @@ func setBacklight(brightness int) {
 			}
 		})
 	}
+}
+
+func getCachedBacklightMax() int {
+	backlightMaxOnce.Do(func() {
+		data, err := os.ReadFile("/sys/class/backlight/backlight/max_brightness")
+		if err != nil {
+			log.Printf("read max_brightness error, fallback=100: %v", err)
+			return
+		}
+		v, err := strconv.Atoi(strings.TrimSpace(string(data)))
+		if err != nil || v <= 0 {
+			log.Printf("parse max_brightness error, fallback=100: %v, raw=%q", err, strings.TrimSpace(string(data)))
+			return
+		}
+		cachedBacklightMax = v
+		log.Printf("cached max_brightness=%d", cachedBacklightMax)
+	})
+	return cachedBacklightMax
 }
 
 func monitorKeyboard(changePageTriggered *bool) {
@@ -401,12 +448,12 @@ func getBacklight() int {
 		log.Printf("getBacklight error: %v", err)
 		return 0
 	}
-	brightness, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	physical, err := strconv.Atoi(strings.TrimSpace(string(data)))
 	if err != nil {
 		log.Printf("getBacklight parse error: %v", err)
 		return 0
 	}
-	return brightness
+	return physicalToLogicalBrightness(physical)
 }
 
 func fadeBacklight(wantValue int, timePeriod time.Duration) {
