@@ -167,6 +167,17 @@ type UBusTrafficUsageResponse struct {
 	TotalBytes float64 `json:"t_b"`
 }
 
+// UBusStatusDevice maps per-device WAN rate fields from luci.bandix getStatus.
+type UBusStatusDevice struct {
+	WanRxRate float64 `json:"w_rx_r"` // WAN RX rate (downlink), bytes per second
+	WanTxRate float64 `json:"w_tx_r"` // WAN TX rate (uplink), bytes per second
+}
+
+// UBusStatusResponse maps the top-level getStatus response.
+type UBusStatusResponse struct {
+	Devices []UBusStatusDevice `json:"d"`
+}
+
 // NetworkSpeed represents upload/download in bytes per second
 type NetworkSpeed struct {
 	UploadMbps   float64
@@ -254,8 +265,9 @@ func getInfoFromPcatWeb() {
 				globalData.Store("WiFiClientsCount", info.WiFiClientsCount)
 				globalData.Store("WiFiInterfaces", info.WiFiInterfaces)
 				globalData.Store("PublicIP", info.PublicIP)
-				globalData.Store("UpSpeedBps", info.UpSpeedBps)
-				globalData.Store("DownSpeedBps", info.DownSpeedBps)
+				// UpSpeedBps/DownSpeedBps are collected from UBus getStatus, not dashboard.json.
+				// globalData.Store("UpSpeedBps", info.UpSpeedBps)
+				// globalData.Store("DownSpeedBps", info.DownSpeedBps)
 				theOS := ""
 				raw := info.OpenWRTVersion // e.g. "R25.02.0 / r7465-d1ccd1687"
 				parts := strings.SplitN(raw, "/", 2)
@@ -315,6 +327,14 @@ func getInfoFromPcatWeb() {
 		fmt.Println("Could not get last month traffic usage by ubus:", err)
 	} else {
 		globalData.Store("LastMonthUsage", fmt.Sprintf("%0.2f", b/1024/1024/1024))
+	}
+
+	// Fetch WAN speed from UBus getStatus and aggregate all devices.
+	if upBps, downBps, err := getWanSpeedBpsByUBus(); err != nil {
+		fmt.Println("Could not get WAN speed by ubus:", err)
+	} else {
+		globalData.Store("UpSpeedBps", upBps)
+		globalData.Store("DownSpeedBps", downBps)
 	}
 
 	// 3) Modem basic
@@ -1820,4 +1840,28 @@ func getTrafficUsageBytesByUBus(startMS, endMS int64, aggregation string) (float
 	}
 
 	return resp.TotalBytes, nil
+}
+
+// getWanSpeedBpsByUBus sums WAN RX/TX rates from all devices in luci.bandix getStatus.
+func getWanSpeedBpsByUBus() (upBps float64, downBps float64, err error) {
+	out, err := secureExecCommand("ubus", "call", "luci.bandix", "getStatus")
+	if err != nil {
+		return 0, 0, fmt.Errorf("ubus getStatus failed: %w", err)
+	}
+
+	var resp UBusStatusResponse
+	if err := secureUnmarshal(out, &resp); err != nil {
+		return 0, 0, fmt.Errorf("failed to parse getStatus response: %w", err)
+	}
+
+	if len(resp.Devices) == 0 {
+		return 0, 0, fmt.Errorf("empty device list in getStatus response")
+	}
+
+	for _, d := range resp.Devices {
+		downBps += d.WanRxRate
+		upBps += d.WanTxRate
+	}
+
+	return upBps, downBps, nil
 }
