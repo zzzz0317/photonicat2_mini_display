@@ -305,25 +305,25 @@ func getInfoFromPcatWeb() {
 	monthStart, monthEnd := getMonthRangeMS(now)
 	lastMonthStart, lastMonthEnd := getLastMonthRangeMS(now)
 
-	if b, err := getTrafficUsageBytesByUBus(todayStart, todayEnd, "daily"); err != nil {
+	if b, err := getTrafficUsageBytesByUBus(todayStart, todayEnd); err != nil {
 		fmt.Println("Could not get daily traffic usage by ubus:", err)
 	} else {
 		globalData.Store("DailyDataUsage", fmt.Sprintf("%0.2f", b/1024/1024/1024))
 	}
 
-	if b, err := getTrafficUsageBytesByUBus(weekStart, weekEnd, "daily"); err != nil {
+	if b, err := getTrafficUsageBytesByUBus(weekStart, weekEnd); err != nil {
 		fmt.Println("Could not get weekly traffic usage by ubus:", err)
 	} else {
 		globalData.Store("WeeklyDataUsage", fmt.Sprintf("%0.2f", b/1024/1024/1024))
 	}
 
-	if b, err := getTrafficUsageBytesByUBus(monthStart, monthEnd, "daily"); err != nil {
+	if b, err := getTrafficUsageBytesByUBus(monthStart, monthEnd); err != nil {
 		fmt.Println("Could not get monthly traffic usage by ubus:", err)
 	} else {
 		globalData.Store("MonthlyDataUsage", fmt.Sprintf("%0.2f", b/1024/1024/1024))
 	}
 
-	if b, err := getTrafficUsageBytesByUBus(lastMonthStart, lastMonthEnd, "daily"); err != nil {
+	if b, err := getTrafficUsageBytesByUBus(lastMonthStart, lastMonthEnd); err != nil {
 		fmt.Println("Could not get last month traffic usage by ubus:", err)
 	} else {
 		globalData.Store("LastMonthUsage", fmt.Sprintf("%0.2f", b/1024/1024/1024))
@@ -1795,7 +1795,8 @@ func getDebianWifiClients() (string, error) {
 func getTodayRangeMS(now time.Time) (int64, int64) {
 	loc := now.Location()
 	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-	return start.UnixMilli(), now.UnixMilli()
+	end := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 999999999, loc)
+	return start.UnixMilli(), end.UnixMilli()
 }
 
 func getWeekRangeMS(now time.Time) (int64, int64) {
@@ -1806,13 +1807,15 @@ func getWeekRangeMS(now time.Time) (int64, int64) {
 	}
 	weekStartDate := now.AddDate(0, 0, -(wd - 1))
 	start := time.Date(weekStartDate.Year(), weekStartDate.Month(), weekStartDate.Day(), 0, 0, 0, 0, loc)
-	return start.UnixMilli(), now.UnixMilli()
+	end := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 999999999, loc)
+	return start.UnixMilli(), end.UnixMilli()
 }
 
 func getMonthRangeMS(now time.Time) (int64, int64) {
 	loc := now.Location()
 	start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, loc)
-	return start.UnixMilli(), now.UnixMilli()
+	end := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 999999999, loc)
+	return start.UnixMilli(), end.UnixMilli()
 }
 
 func getLastMonthRangeMS(now time.Time) (int64, int64) {
@@ -1823,13 +1826,13 @@ func getLastMonthRangeMS(now time.Time) (int64, int64) {
 	return lastMonthStart.UnixMilli(), lastMonthEnd.UnixMilli()
 }
 
-func getTrafficUsageBytesByUBus(startMS, endMS int64, aggregation string) (float64, error) {
+func getTrafficUsageBytesByUBus(startMS, endMS int64) (float64, error) {
 	payload := fmt.Sprintf(
-		`{"start_ms":%d,"end_ms":%d,"aggregation":"%s","mac":null,"network_type":"wan"}`,
-		startMS, endMS, aggregation,
+		`{"start_ms":%d,"end_ms":%d,"network_type":"wan"}`,
+		startMS, endMS,
 	)
 
-	out, err := exec.Command("ubus", "call", "luci.bandix", "getTrafficUsageIncrements", payload).Output()
+	out, err := exec.Command("ubus", "call", "luci.bandix", "getTrafficUsageRanking", payload).Output()
 	if err != nil {
 		return 0, fmt.Errorf("ubus call failed: %w", err)
 	}
