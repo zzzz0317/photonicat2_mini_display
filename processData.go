@@ -268,24 +268,26 @@ func getInfoFromPcatWeb() {
 				// UpSpeedBps/DownSpeedBps are collected from UBus getStatus, not dashboard.json.
 				// globalData.Store("UpSpeedBps", info.UpSpeedBps)
 				// globalData.Store("DownSpeedBps", info.DownSpeedBps)
-				theOS := ""
-				raw := info.OpenWRTVersion // e.g. "R25.02.0 / r7465-d1ccd1687"
-				parts := strings.SplitN(raw, "/", 2)
-				if len(parts) == 2 {
-					ver := strings.TrimSpace(parts[0])    // "R25.02.0"
-					commit := strings.TrimSpace(parts[1]) // "r7465-d1ccd1687"
 
-					// remove trailing ".0" from version
-					ver = strings.TrimSuffix(ver, ".0") // "R25.02"
+				// theOS are collected from /etc/os-release
+				// theOS := ""
+				// raw := info.OpenWRTVersion // e.g. "R25.02.0 / r7465-d1ccd1687"
+				// parts := strings.SplitN(raw, "/", 2)
+				// if len(parts) == 2 {
+				// 	ver := strings.TrimSpace(parts[0])    // "R25.02.0"
+				// 	commit := strings.TrimSpace(parts[1]) // "r7465-d1ccd1687"
 
-					// keep only up to the first dash in commit
-					commit = strings.SplitN(commit, "-", 2)[0] // "r7465"
+				// 	// remove trailing ".0" from version
+				// 	ver = strings.TrimSuffix(ver, ".0") // "R25.02"
 
-					theOS = fmt.Sprintf("%s / %s", ver, commit) // "R25.02 / r7465"
-				} else {
-					theOS = raw
-				}
-				globalData.Store("OSVersion", theOS)
+				// 	// keep only up to the first dash in commit
+				// 	commit = strings.SplitN(commit, "-", 2)[0] // "r7465"
+
+				// 	theOS = fmt.Sprintf("%s / %s", ver, commit) // "R25.02 / r7465"
+				// } else {
+				// 	theOS = raw
+				// }
+				// globalData.Store("OSVersion", theOS)
 
 				// Build a slice of SSIDs for convenience
 				var ssids []string
@@ -295,6 +297,13 @@ func getInfoFromPcatWeb() {
 				globalData.Store("WiFiSSIDs", ssids)
 			}
 		}
+	}
+
+	// === Get OSVersion from /etc/os-release PRETTY_NAME ===
+	if osVer, err := getOSPrettyName(); err == nil && osVer != "" {
+		globalData.Store("OSVersion", osVer)
+	} else {
+		globalData.Store("OSVersion", "N/A")
 	}
 
 	// === 2) Fetch Traffic Usage From Bandix UBus ===
@@ -1867,4 +1876,41 @@ func getWanSpeedBpsByUBus() (upBps float64, downBps float64, err error) {
 	}
 
 	return upBps, downBps, nil
+}
+
+func getOSPrettyName() (string, error) {
+	data, err := os.ReadFile("/etc/openwrt_release")
+	if err == nil {
+		// Parse OpenWRT release info if available
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "ZZ_DISTRIB_VERSION=") {
+				val := strings.TrimPrefix(line, "ZZ_DISTRIB_VERSION=")
+				val = strings.Trim(val, `"'`)
+				if val == "" {
+					continue
+				}
+				return val, nil
+			}
+		}
+	}
+
+	data, err = os.ReadFile("/etc/os-release")
+	if err != nil {
+		return "", fmt.Errorf("read /etc/os-release failed: %w", err)
+	}
+
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "VERSION=") {
+			val := strings.TrimPrefix(line, "VERSION=")
+			val = strings.Trim(val, `"'`)
+			if val == "" {
+				return "", fmt.Errorf("VERSION is empty") 
+			}
+			return val, nil
+		}
+	}
+
+	return "", fmt.Errorf("VERSION not found in /etc/os-release")
 }
