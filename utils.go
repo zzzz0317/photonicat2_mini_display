@@ -693,6 +693,14 @@ func mergeConfigs() error {
 
 	log.Println("JSON deep merge completed successfully")
 
+	// Default ping sites if missing or too short to be valid
+	if len(cfg.PingSite0) <= 2 {
+		cfg.PingSite0 = "taobao.com"
+	}
+	if len(cfg.PingSite1) <= 2 {
+		cfg.PingSite1 = "photonicat.com"
+	}
+
 	// 5. Validation
 	if cfg.ScreenDimmerTimeOnBatterySeconds < 0 {
 		return fmt.Errorf("screen_dimmer_time_on_battery_seconds must be ≥ 0, got %d",
