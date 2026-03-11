@@ -299,8 +299,8 @@ func getInfoFromPcatWeb() {
 		}
 	}
 
-	// === Get OSVersion from /etc/os-release PRETTY_NAME ===
-	if osVer, err := getOSPrettyName(); err == nil && osVer != "" {
+	// === Get OSVersion from /etc/openwrt_release and /etc/os-release ===
+	if osVer, err := getOSVersion(); err == nil && osVer != "" {
 		globalData.Store("OSVersion", osVer)
 	} else {
 		globalData.Store("OSVersion", "N/A")
@@ -1878,7 +1878,7 @@ func getWanSpeedBpsByUBus() (upBps float64, downBps float64, err error) {
 	return upBps, downBps, nil
 }
 
-func getOSPrettyName() (string, error) {
+func getOSVersion() (string, error) {
 	data, err := os.ReadFile("/etc/openwrt_release")
 	if err == nil {
 		// Parse OpenWRT release info if available
